@@ -124,6 +124,13 @@ sub scrollTo(index as Integer)
         row.detail.translation = [row.title.translation[0], titleY + Int(row.title.boundingRect().height) + 2]
         row.fill.visible = highlighted
         row.check.visible = option.value = m.top.chosen or util.isTrue(option.marked)
+        ' A disabled option dims its text, not the highlight, which stays
+        ' opaque over the page.
+        textOpacity = 1.0
+        if util.isTrue(option.disabled) then textOpacity = theme.detail.DISABLED_OPACITY
+        row.title.opacity = textOpacity
+        row.detail.opacity = textOpacity
+        row.check.opacity = textOpacity
         if highlighted
             row.title.color = theme.color.ON_FOCUS
             row.detail.color = theme.detail.PICKER_DETAIL_ON_FOCUS
@@ -158,6 +165,8 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             speakRow()
         end if
     else if key = "OK"
+        ' A disabled option (Unsupported format) keeps the menu open.
+        if m.at < m.options.Count() and util.isTrue(m.options[m.at].disabled) then return true
         if m.at < m.options.Count() then m.top.picked = m.options[m.at].value
         close()
     else if key = "back" or key = "left" or key = "right"
