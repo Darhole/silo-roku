@@ -88,7 +88,7 @@ sub serve()
         ' Due playback jobs, expiries, and session operations that waited.
         runWorker(playback.worker.tick(m.worker, workerEnv()))
         ' A record the registry refused is saved again when its retry is due.
-        if storage.retryDue(m.store, workerMs()) or storage.retryDue(m.serversStore, workerMs()) then persist()
+        if storage.retryDue(m.store, workerMs()) or storage.retryDue(m.accountsStore, workerMs()) then persist()
     end while
 end sub
 
@@ -101,10 +101,15 @@ end sub
 ' credentials, with a warning, to a server that does not report its origin.
 sub startSession()
     snapshot = m.top.snapshot
-    record = storage.decode(storage.encode(snapshot), storage.encodeServers(snapshot.servers))
+    record = storage.decode(storage.encode(snapshot), storage.encodeAccounts(snapshot, snapshot.usedAt))
+    ' The snapshot no longer holds an account entry that did not decode, so
+    ' the round trip cannot tell; launch keeps every saved server then.
+    record.unreadAccounts = util.isTrue(snapshot.unreadAccounts)
+    ' A migration the registry refused (storage.migration) is saved at once.
+    unsaved = util.isTrue(snapshot.unsaved)
     m.top.snapshot = {}
     m.store = storage.writer(CreateObject("roRegistrySection", storage.SECTION_NAME))
-    m.serversStore = storage.writer(CreateObject("roRegistrySection", storage.SERVERS_SECTION), storage.SERVERS_KEYS)
+    m.accountsStore = storage.writer(CreateObject("roRegistrySection", storage.ACCOUNTS_SECTION), storage.ALL_KEYS)
     info = CreateObject("roDeviceInfo")
     generated = record.deviceId = ""
     if generated then record.deviceId = LCase(info.GetRandomUUID())
@@ -123,7 +128,7 @@ sub startSession()
     ' a warning; a mismatch is still refused.
     m.session = api.auth.coordinator.create(record, facts, true)
     m.baseUrl = record.origin
-    if generated then persist()
+    if generated or unsaved then persist()
     apply(api.auth.coordinator.start(m.session, nowSeconds()))
     publish()
 end sub
@@ -153,7 +158,7 @@ function waitMs() as Integer
     end if
     wake = playback.worker.nextWake(m.worker)
     if wake <> invalid and (remaining = invalid or wake - workerMs() < remaining) then remaining = wake - workerMs()
-    for each store in [m.store, m.serversStore]
+    for each store in [m.store, m.accountsStore]
         retry = storage.retryIn(store, workerMs())
         if retry <> invalid and (remaining = invalid or retry < remaining) then remaining = retry
     end for
@@ -345,6 +350,8 @@ sub apply(decisions as Object)
             persist()
         else if kind = "publish"
             publish()
+        else if kind = "forgetAccount"
+            forgetAccount(util.text(decision.scope))
         else if kind = "server"
             m.baseUrl = decision.origin
             log.info("api", "server changed", { origin: decision.origin })
@@ -615,18 +622,30 @@ sub clearBodyFiles()
     end for
 end sub
 
-' Writes and flushes the session's record, and the saved servers' section;
-' the only registry writes. Each writes only the keys that changed. When the
+' Writes and flushes the accounts' section, then the session's record; the
+' only registry writes. Each writes only the keys that changed. When the
 ' registry refuses one, the session goes on from memory and the loop saves
-' the record again later (storage.save), until a save succeeds.
+' the record again later (storage.save), until a save succeeds. The
+' record waits for the accounts: its schema tells the next launch that
+' the accounts are stored and layout 1 can go (storage.migration).
 sub persist()
     record = api.auth.coordinator.record(m.session)
+    if not storage.save(m.accountsStore, storage.encodeAccounts(record, nowSeconds()), workerMs())
+        log.warn("storage", "accounts write failed; retrying", { retryMs: m.accountsStore.delay })
+        return
+    end if
     if not storage.save(m.store, storage.encode(record), workerMs())
         log.warn("storage", "registry write failed; retrying", { retryMs: m.store.delay })
     end if
-    if not storage.save(m.serversStore, storage.encodeServers(record.servers), workerMs())
-        log.warn("storage", "saved servers write failed; retrying", { retryMs: m.serversStore.delay })
-    end if
+end sub
+
+' An account signed out or its server was removed: its Browse sort and
+' filters go with it (libraryPrefs.forget). An account that kept the keys
+' it had before accounts (legacyKeys) has nothing to find by its ID; its
+' entries age out of Browse's budget.
+sub forgetAccount(accountId as String)
+    if accountId = "" then return
+    libraryPrefs.forget(CreateObject("roRegistrySection", libraryPrefs.SECTION), accountId)
 end sub
 
 ' The session as screens may know it, without tokens; only AppScene observes it.

@@ -1,5 +1,6 @@
 import "pkg:/components/screens/firstRun.bs"
 import "pkg:/source/auth/profiles.bs"
+import "pkg:/source/home/shell.bs"
 import "pkg:/source/nav/client.bs"
 import "pkg:/source/nav/focus.bs"
 import "pkg:/source/nav/textures.bs"
@@ -11,7 +12,7 @@ const ACCOUNT_GAP = 14
 const GRID_GAP = 84
 ' At most this many rows show; more scroll.
 const VISIBLE_ROWS = 2
-' Change server and Sign out, compact buttons 20 px apart, pinned EDGE px
+' Change Account and Sign out, compact buttons 20 px apart, pinned EDGE px
 ' above the bottom; the heading and grid are centred between EDGE and them.
 const FOOTER_GAP = 20
 const EDGE = 60
@@ -37,7 +38,7 @@ sub init()
     m.status = m.top.findNode("status")
     m.status.observeField("activated", "onRetry")
     m.buttonRow = m.top.findNode("buttons")
-    m.changeServer = addFooterButton(i18n.text("common.changeServer"))
+    m.changeAccount = addFooterButton(i18n.text("profiles.changeAccount"))
     m.signOut = addFooterButton(i18n.text("common.signOut"))
     m.footerHeight = Int(m.signOut.localBoundingRect().height)
     m.spinner = m.top.findNode("spinner")
@@ -53,9 +54,11 @@ sub init()
     m.choosing = false
     ' The focus key a rebuilt picker returns to (Screen.xml onShow).
     m.restore = invalid
-    ' Add profile shows (the household has a primary profile), and the add
-    ' flow (PIN, New Profile) was opened from it.
+    ' Add profile is offered (the household has a primary profile), and the
+    ' add flow (PIN, New Profile) was opened from it. m.sheet is Add's
+    ' choices while they show (openAddChoice).
     m.canAdd = false
+    m.sheet = invalid
     m.adding = false
     m.reload = invalid
 end sub
@@ -103,6 +106,7 @@ end sub
 sub onRelease()
     m.top.prompting = false
     closeDialog()
+    closeSheet()
 end sub
 
 ' The viewer's way back from PIN, or the first focus: the grid when it
@@ -143,11 +147,16 @@ end sub
 sub onProfiles(event as Object)
     result = takeResult(event)
     if result = invalid then return
-    if not result.ok
-        showError(onboarding.profiles.loadErrorKey(result))
-        return
+    if result.ok
+        m.profiles = api.auth.profiles.list(result.body)
+    else
+        ' Offline, the account's profiles as last listed stand in.
+        m.profiles = savedProfiles()
+        if m.profiles.Count() = 0
+            showError(onboarding.profiles.loadErrorKey(result))
+            return
+        end if
     end if
-    m.profiles = api.auth.profiles.list(result.body)
     if m.profiles.Count() = 0
         showError("profiles.empty")
         return
@@ -163,7 +172,7 @@ sub onProfiles(event as Object)
     launch = invalid
     if session <> invalid then launch = session.launch
     ' A picker rebuilt under memory pressure (PIN cancelled) is still choosing.
-    choice = onboarding.profiles.onLoad(m.profiles, rememberedId, m.choosing or m.restore <> invalid, launch)
+    choice = onboarding.profiles.onTiles(m.profiles, rememberedId, m.choosing or m.restore <> invalid, launch)
     if choice.action = onboarding.profiles.OPEN
         openProfile(choice.profile, true)
         return
@@ -176,6 +185,16 @@ sub onProfiles(event as Object)
     end if
     m.restore = invalid
 end sub
+
+' The open account's profiles as the session last saved them.
+function savedProfiles() as Object
+    session = api.session.current()
+    if session = invalid or type(session.accounts) <> "roArray" then return []
+    for each account in session.accounts
+        if util.isTrue(account.current) and type(account.profiles) = "roArray" then return account.profiles
+    end for
+    return []
+end function
 
 ' The focused tile, kept when PIN covers the picker (spec section 5.3).
 function focusKey() as Dynamic
@@ -191,13 +210,13 @@ function keyAt(index as Integer) as Dynamic
     return nav.focus.newKey("profiles", ids[index], 0, index)
 end function
 
-' The grid's tiles' keys in order: the profiles' IDs, then Add profile's.
+' The grid's tiles' keys in order: the profiles' IDs, then Add's.
 function tileIds() as Object
     ids = []
     for each profile in m.profiles
         ids.Push(profile.id)
     end for
-    if m.canAdd then ids.Push(onboarding.profiles.ADD_TILE)
+    ids.Push(onboarding.profiles.ADD_TILE)
     return ids
 end function
 
@@ -227,13 +246,13 @@ sub showPicker()
             item.isChild = profile.isChild
             item.description = profileDescription(profile)
         end for
+        ' Add: a profile when the household has a primary profile, an
+        ' account on a saved server, or a server (openAddChoice).
         m.canAdd = onboarding.profiles.householdPrimary(m.profiles) <> invalid
-        if m.canAdd
-            item = root.createChild("ProfileContent")
-            item.isAdd = true
-            item.title = i18n.text("profiles.add")
-            item.description = item.title
-        end if
+        item = root.createChild("ProfileContent")
+        item.isAdd = true
+        item.title = i18n.text("profiles.add")
+        item.description = item.title
         grid = onboarding.profiles.gridLayout(root.getChildCount())
         m.grid.numColumns = grid.columns
         rows = grid.rows
@@ -303,11 +322,11 @@ sub refresh()
         m.status.setFields({ message: i18n.text(m.errorKey), action: action, centre: [960, (EDGE + footerTop) \ 2] })
     end if
     m.buttonRow.visible = picking or failed
-    width = placeInRow([m.changeServer, m.signOut], FOOTER_GAP)
+    width = placeInRow([m.changeAccount, m.signOut], FOOTER_GAP)
     m.buttonRow.translation = [(1920 - width) \ 2, footerTop]
     if picking then placeHeading(footerTop)
     rowsNow = []
-    if m.buttonRow.visible then rowsNow.Push([m.changeServer, m.signOut])
+    if m.buttonRow.visible then rowsNow.Push([m.changeAccount, m.signOut])
     setControlRows(rowsNow, false)
     spin(m.spinner, m.state = "loading" or m.state = "opening", [960, 540])
 end sub
@@ -388,7 +407,7 @@ end sub
 sub onProfileSelected()
     if m.request <> invalid then return
     if m.grid.itemSelected >= m.profiles.Count()
-        startAdd()
+        openAddChoice()
         return
     end if
     ' A new choice clears the last one's error.
@@ -438,6 +457,15 @@ end sub
 
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
+    ' The sign-out confirmation leaves Back to the screen.
+    if m.dialog <> invalid
+        if key = "back"
+            closeDialog()
+            focusScreen()
+            highlightControl(m.signOut)
+        end if
+        return true
+    end if
     if m.request <> invalid then return key <> "back"
     if m.controlAt = invalid
         ' The grid or Try again left a key unhandled.
@@ -455,47 +483,78 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     if moveHighlight(key) then return true
     if key <> "OK" then return false
     control = highlightedControl()
-    if control.isSameNode(m.changeServer)
-        nav.changeServer()
+    if control.isSameNode(m.changeAccount)
+        nav.push(nav.route.ACCOUNTS, { pushed: true })
     else if control.isSameNode(m.signOut)
         confirmSignOut()
     end if
     return true
 end function
 
-' "Sign out?" (spec section 5.4), as tvOS asks before signing out.
-sub confirmSignOut()
-    dialog = CreateObject("roSGNode", "StandardMessageDialog")
-    dialog.title = i18n.text("profiles.signOut.title")
-    dialog.message = [i18n.text("profiles.signOut.body")]
-    dialog.buttons = [i18n.text("profiles.signOut.confirm"), i18n.text("profiles.signOut.remove"), i18n.text("common.cancel")]
-    dialog.observeField("buttonSelected", "onSignOutAnswered")
-    dialog.observeField("wasClosed", "onSignOutAnswered")
-    m.dialog = dialog
-    m.top.getScene().dialog = dialog
+' Add (ChoiceSheet): another profile in this account (when the household
+' has a primary profile), another account, or another server.
+sub openAddChoice()
+    choices = []
+    if m.canAdd then choices.Push({ key: "profile", title: i18n.text("profiles.addChoice.profile"), detail: i18n.text("profiles.addChoice.profileDetail"), icon: theme.onboardingArt.PERSON })
+    choices.Push({ key: "account", title: i18n.text("profiles.addChoice.account"), detail: i18n.text("profiles.addChoice.accountDetail"), icon: theme.onboardingArt.KEY })
+    choices.Push({ key: "server", title: i18n.text("profiles.addChoice.server"), detail: i18n.text("profiles.addChoice.serverDetail"), icon: theme.onboardingArt.GLOBE })
+    m.sheet = m.top.createChild("ChoiceSheet")
+    m.sheet.setFields({ title: i18n.text("profiles.addChoice.title"), choices: { items: choices } })
+    m.sheet.observeField("choice", "onAddAnswered")
+    m.sheet.setFocus(true)
 end sub
 
-sub onSignOutAnswered()
-    if m.dialog = invalid then return
-    chosen = -1
-    if m.dialog.wasClosed <> true then chosen = m.dialog.buttonSelected
+' Add an account opens Change Account on this server's Add an account, so
+' the viewer picks the server there.
+sub onAddAnswered()
+    choice = m.sheet.choice
+    closeSheet()
+    focusPicker()
+    if choice = "profile"
+        startAdd()
+    else if choice = "account"
+        nav.push(nav.route.ACCOUNTS, { pushed: true, add: sessionOrigin() })
+    else if choice = "server"
+        nav.push(nav.route.SETUP, { pushed: true })
+    end if
+end sub
+
+sub closeSheet()
+    if m.sheet = invalid then return
+    sheet = m.sheet
+    m.sheet = invalid
+    sheet.unobserveField("choice")
+    m.top.removeChild(sheet)
+end sub
+
+' "Sign out of {account} on {server}?" (spec section 5.4), as tvOS asks
+' before signing out: the avatar menu's confirmation (SignOutDialog), Cancel
+' focused, saying the server goes too while it has no other account. Back
+' closes it (onKeyEvent).
+sub confirmSignOut()
+    m.dialog = m.top.createChild("SignOutDialog")
+    m.dialog.observeField("choice", "onSignOutChoice")
+    m.dialog.setFocus(true)
+end sub
+
+sub onSignOutChoice()
+    choice = m.dialog.choice
     closeDialog()
     focusScreen()
-    if chosen = 0
+    if choice = "confirm"
         ' Ends the session here at once, then tells the server; AppScene
-        ' starts over at sign-in.
+        ' shows Change Account for the other accounts, or sign-in, or
+        ' server setup once the last server is gone.
         api.session.signOut(api.newHandle(m.top.owner))
-    else if chosen = 1
-        ' Also forgets the server: the next saved server takes its place,
-        ' else AppScene starts over at server setup.
-        api.session.forgetCurrentServer(api.newHandle(m.top.owner))
+    else
+        highlightControl(m.signOut)
     end if
 end sub
 
 sub closeDialog()
     if m.dialog = invalid then return
-    m.dialog.unobserveField("buttonSelected")
-    m.dialog.unobserveField("wasClosed")
-    m.dialog.close = true
+    dialog = m.dialog
     m.dialog = invalid
+    dialog.unobserveField("choice")
+    m.top.removeChild(dialog)
 end sub

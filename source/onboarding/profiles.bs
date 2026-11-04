@@ -50,6 +50,16 @@ namespace onboarding.profiles
         return { action: PICK, profile: invalid }
     end function
 
+    ' onLoad for a picker of several saved accounts (docs/spec.md section
+    ' 7.5): a single profile without a PIN never shows the picker, whatever
+    ' Profile Selection says, unless the viewer is choosing.
+    function onTiles(list as Object, rememberedId as String, choosing as Boolean, launch as Dynamic) as Object
+        choice = onLoad(list, rememberedId, choosing, launch)
+        if choice.action = OPEN or choosing then return choice
+        if list.Count() = 1 and not list[0].hasPin then return { action: OPEN, profile: list[0] }
+        return choice
+    end function
+
     ' The picker grid for count profiles: up to AVATARS_PER_ROW columns,
     ' centred, as { columns, rows, width, x }, in FHD px.
     function gridLayout(count as Integer, screenWidth = 1920 as Integer) as Object

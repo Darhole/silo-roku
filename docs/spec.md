@@ -450,13 +450,13 @@ their existing HD/FHD assets.
   - Rows: Switch Profile, History, Requests (while the server offers
     Requests, section 5.11), and Watch Party ("Return to Watch Party" in a
     party, while the server offers one: [`watch-party.md`](watch-party.md)
-    section 4.1); then Settings, Switch Server, and Sign Out. Watchlist and
+    section 4.1); then Settings, Change Account (section 7.5), and Sign Out. Watchlist and
     Favorites are in the For You menu only. They are 54 px tall (22 px SemiBold,
     16 px inset), 10 px apart. A focused row gets a white fill with radius
     14; resting labels are at 86%, and Sign Out is red at 90%.
   - A divider separates groups only.
-  - Sign Out asks for confirmation (Cancel / Sign Out / Sign Out & Remove
-    Server).
+  - Sign Out asks for confirmation (Cancel / Sign Out), saying the server
+    is removed too when it has no other account (section 7.5).
 - **For You menu** (tvOS's `TVForYouDropdown`). The avatar menu's panel,
   460 px wide at y 132, centred under the tab within the side insets,
   headed "FOR YOU" in the library list's header style, then
@@ -570,8 +570,9 @@ their existing HD/FHD assets.
   HTTP. Before using plain HTTP, the client asks "Connect without
   encryption?". The address keyboard keeps its `https://`, `http://`, and
   `.com` chips (5.9).
-- **Saved servers.** Change server (sign-in, the picker, the message
-  screens, Settings, and the avatar menu's Switch Server) opens this list
+- **Saved servers.** Change server (sign-in and the message screens; the
+  picker, Settings, and the avatar menu reach servers through Change
+  Account, section 7.5) opens this list
   when another server is saved, and server setup ("Set up with your phone")
   otherwise. Message
   screen layout with no card: "Choose a server", "Switch to a saved server,
@@ -649,8 +650,8 @@ their existing HD/FHD assets.
     (a white capsule with black text, top right).
   - Change server and Sign out, compact buttons 20 px apart, are pinned 60 px
     above the bottom edge, centred. The heading and grid are centred in the
-    space above them. Sign out asks for confirmation (Sign out / Sign Out & Remove
-    Server / Cancel).
+    space above them. Sign out asks for confirmation (Cancel / Sign out),
+    as the avatar menu's does.
   - A list that fails to load shows the error as section 5.8 does, with Try
     again.
   - Focus starts on the profile last opened on this device, else the first.
@@ -662,9 +663,9 @@ their existing HD/FHD assets.
     takes the profiles' ring, scale, and name. It opens the primary
     profile's PIN when it has one, then New Profile; back on the picker, the
     list is read again and a new profile joins it with focus.
-  - An account with a single profile and no PIN skips the picker, except
-    when Profile Selection asks at launch; right after a sign-in it skips
-    it then too, as tvOS does.
+  - An account with a single profile and no PIN skips the picker, whatever
+    Profile Selection says, unless the viewer chose Switch Profile (section
+    7.5).
 - **Profile at launch.** Whether a launch reopens the profile last chosen on
   this device or asks "Who's watching?" follows Profile Selection (Settings
   > General, section 5.8.1), as tvOS's `ProfileLaunchPreferences` and
@@ -2730,17 +2731,16 @@ sign-in, the code on screen, and a companion approval overlap, the first to
 finish keeps the session: the others' tokens are dropped, and open device
 logins are withdrawn.
 
-Saved servers: changing the server keeps the one left behind, with its
-tokens, profile tokens, account, and remembered profile, in a second
-registry section (`silo.servers`, 8 KB, at most seven servers besides the
-current one). Switching back restores that sign-in after `system/info`
-confirms the origin again, with no new login. Past the section's budget,
-the least recently used servers lose their tokens first (they stay saved,
-signed out), then go. Credentials go only to the configured server; a
-saved server's are sent nowhere until it is current again. Removing a
-saved server ends its session on that server only when this run confirmed
-its origin; otherwise its tokens are just forgotten here. The three
-registry sections together stay within Roku's 32 KB.
+Saved servers and accounts (section 7.5): changing the server keeps the
+one left behind, and its active account with its tokens, profile tokens,
+and remembered profile. Switching back restores that account after
+`system/info` confirms the origin again, with no new login. Credentials
+go only to the active account's server with screens' requests; a saved
+account's are sent only to end its session or list its profiles, and only
+to an origin `system/info` confirmed in this run. Removing a saved server
+signs out of every account on it; each session ends on its server only
+when this run confirmed that origin, otherwise its tokens are just
+forgotten here.
 
 An app update must not force the viewer to sign in again (criterion 4.1).
 Registry layout changes migrate stored sessions instead of discarding them.
@@ -2813,6 +2813,99 @@ Settings reads and writes also send `X-Silo-Client-Family: tv`.
 
 The installation ID is generated once and stored in the registry. A Roku
 hardware serial number or advertising ID is not used as Silo's device identity.
+
+### 7.5 Several accounts per server
+
+Silo keeps more than one account per server, as the Apple and Android apps
+do (multi-account design spec of 2026-11-02, written for Apple and Android
+and applied here to Roku).
+
+**Storage.** Registry layout 2. `silo` holds the device's values (origin of
+the active server, installation ID, pairing key, Profile Selection, last
+use) and `active`, the active account's `localAccountId`. `silo.accounts`
+(21 KB) holds the saved servers as one JSON list (`servers`: origin, name,
+the viewer's label, last use) and one JSON entry per account under
+`a.<localAccountId>`: server, the server's user ID, username, tokens,
+remembered profile, PIN proofs, the last profile list (for the picker),
+when it was added and last used. `localAccountId` is a UUID made on this
+device and every local key uses it; the server's user ID only finds a saved
+account again when the same person signs in, which refreshes that account
+instead of adding another and ends the session it replaces on the server.
+Past the budget, the least recently used accounts lose their profile lists,
+then their sessions (they stay, needing to sign in again), then go. At most
+eight servers and twelve accounts are kept.
+
+**Migration.** Main moves layout 1 (one session per server, in `silo` and
+`silo.servers`) to layout 2 before the scene starts, with no network: each
+server with a saved account becomes an account with a new `localAccountId`,
+keeping its tokens, the server's user ID (layout 1 stored it), remembered
+profile, and PIN proofs; the recent Watch Party is moved to the new ID. The
+layout-1 keys are deleted only after layout 2 reads back; until then the
+next launch migrates again. Only the migration reads layout 1. Browse's
+sort and filters are keyed by a digest that cannot be re-keyed, so a
+migrated account keeps the keys it had (no account part); an account
+added later keys them with its ID, and its sign-out deletes them.
+
+**Picker and Change Account.** "Who's watching?" shows the open
+account's profiles, as before, from the account's last profile list when
+the server cannot be reached. Change Account, in the picker's footer (in
+Change server's place) and in the avatar menu (in Switch Server's), shows
+a rail of the saved servers, each with its mark (its branding's
+`mark_url`, else the Silo project icon) and name, the active server first,
+then by last use, with Add server under them; beside it, the selected
+server's accounts, each with its profile count, the open one badged
+Current and one that needs to sign in again badged "Sign in again", then
+Add an account on that server. Left and Right move between the rail and the
+accounts; an arrow shows when either has more rows to scroll. OK on an
+account makes it active, on its server, and shows its picker; on one that
+needs to sign in again, sign-in with its username filled in, where Back
+returns to Change Account. With no account open (after a sign-out or an
+expiry) while another has a session, Change Account is the root screen
+instead of the picker. Add, after the profiles, opens a sheet of three
+choices: Add a profile (when the household has a primary profile, as
+before), Add an account (Change Account, on the active server's Add an
+account), and Add a server. After a sign-in, an account with one profile
+and no PIN opens; otherwise its picker shows. Profile Selection applies as
+before: Automatic restores the last account and profile, and a single
+profile without a PIN never shows the picker.
+
+**Signing out.** The avatar menu's Switch Server is now Change Account. Its
+header adds the username after the server while the active server has more
+than one saved account. Sign Out asks "Sign out of {account} on {server}?"
+and signs out of the active account only: its session ends on the server
+(best effort), and its tokens, profile list, PIN proofs, Browse sort and
+filters, and recent Watch Party go. A saved server never stays without an
+account (owner decision, 2026-11-03): signing out of a server's last
+account removes the server too, and the confirmation adds "{server} will
+be removed from this Roku."; there is no separate Sign Out & Remove Server.
+Then, with another account's session to go to, Change Account shows,
+otherwise sign-in (on the most recently used saved server when the server
+went), or server setup when no server is left. At launch, saved servers
+with no account go (servers kept after a sign-out before accounts), except
+the active one, and none when an account entry cannot be read. Back from
+signing in to a server with no account yet removes it. A refused refresh
+is not a sign-out: the account stays, its server with it, and with another
+session to go to Change Account shows it with "Sign in again".
+
+**Settings › Accounts** replaces the Server category: for each server, its
+accounts with their profile counts (OK signs out, or offers Sign In Again
+for an account that needs it), Add an account on {server}, Rename Server
+(the viewer's label, which wins over the server's own name), and Remove
+Server, which signs out of every account on it; then Add a server.
+
+Roku-specific deviations from that design: by the project owner's
+decision of 2026-11-02, the picker shows one account at a time with a
+Change Account screen (servers on a rail, each server's accounts beside
+it), rather than the design's single picker merging every account's
+tiles, and Add an account reaches every saved server, not only the active
+one; a server without a mark of its own shows the Silo project icon where
+the design shows its initial; the Android and Apple apps follow the
+design. There are no
+downloads and no push notifications on Roku, so nothing about them
+applies. Signing in as a different account on an expired one keeps the
+expired account saved rather than replacing it (no downloads to lose). A
+migrated account's Browse entries are not deleted at its sign-out and age
+out of Browse's budget instead.
 
 ## 8. Catalog and browse behavior
 
