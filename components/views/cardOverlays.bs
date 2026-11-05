@@ -1,0 +1,130 @@
+import "pkg:/components/theme/helpers.bs"
+import "pkg:/components/views/overlayKeys.bs"
+import "pkg:/source/util/values.bs"
+
+' CatalogCard's card overlays (catalog.overlays; silo-server's
+' card-overlays.md, the web's CardOverlays.tsx): a poster's, landscape
+' card's, or episode still's badges, and a started series poster's episodes
+' left, drawn by OverlayArtTask. A card that rounds its corners with the
+' 9-patch frame shows them in its frame (overlayFramed), adding no node;
+' otherwise, or when badges reach its middle, as up to two Posters over the
+' art and progress bar, under the frame and the watched mark. A card only
+' builds the image's key (overlayKeyFor) and sets a uri, so its overlays
+' cost no layout or text on the render thread (plan section 4.6). Views ask
+' ahead for their cards' images (overlayPrefetch); a card whose image is not
+' drawn yet shows none until it is.
+
+sub overlayInit()
+    ' The top and bottom halves' Posters, made when the card first needs
+    ' them (a card that shows its overlays in its frame never does); the
+    ' key it shows or waits for, and the request it waits on.
+    m.ovPoster = invalid
+    m.ovPoster2 = invalid
+    m.ovKey = ""
+    m.ovPending = ""
+    m.ovRequest = invalid
+    m.ovArt = invalid
+end sub
+
+' The view showing the card says its overlays may have changed: a new
+' document, or images ready.
+sub onOverlayRefresh()
+    item = m.top.itemContent
+    if item <> invalid and m.cardSize[0] > 0 then overlayShow(item)
+end sub
+
+' Shows item's overlay image under the overlays that apply, or none.
+sub overlayShow(item as Object)
+    framed = not m.rounded and overlayFramed(m.lowTier)
+    key = overlayKeyFor(item, m.shape, m.cardSize[0], m.cardSize[1], framed)
+    if key = m.ovKey
+        ' Drawn again while waiting: the image may be ready now.
+        if m.ovPending <> "" then onOverlayArt()
+        return
+    end if
+    m.ovKey = key
+    overlayWait("", invalid)
+    if key = ""
+        overlayPlace("")
+        return
+    end if
+    if m.ovArt = invalid then m.ovArt = overlayArtNode()
+    if m.ovArt.hasField(key)
+        overlayPlace(m.ovArt.getField(key))
+        return
+    end if
+    overlayPlace("")
+    request = overlayRequestFor(item, key, m.shape, m.cardSize[0], m.cardSize[1], framed)
+    ' The Task tells this card (overlayRefresh) when the image is drawn.
+    request.card = m.top
+    overlayWait(key, request)
+    m.ovArt.request = m.ovRequest
+    ' Another card's request for the same image may have been answered since
+    ' the check above, with no announcement left to come.
+    if m.ovArt.hasField(key) then onOverlayArt()
+end sub
+
+' Images may be ready, or the Task may have started listening: the one this
+' card waits for may be among them, or its request may have come before the
+' Task listened, and goes again (the Task draws each key once).
+sub onOverlayArt()
+    key = m.ovPending
+    if key = "" then return
+    if not m.ovArt.hasField(key)
+        m.ovArt.request = m.ovRequest
+        return
+    end if
+    overlayWait("", invalid)
+    overlayPlace(m.ovArt.getField(key))
+end sub
+
+' Waits for key's image ("" to stop), sending request again when told the
+' Task has started listening.
+sub overlayWait(key as String, request as Dynamic)
+    m.ovPending = key
+    m.ovRequest = request
+end sub
+
+' Shows the images: "F,uri" for a frame holding the overlays (the card's
+' frame Poster shows it), else "x,y,w,h,uri;x,y,w,h,uri" in the card for
+' its top half's overlays and its bottom half's (either "" for none), or
+' none for "".
+sub overlayPlace(placed as String)
+    framed = Left(placed, 2) = "F,"
+    frameUri = theme.art.CARD_FRAME
+    if m.shape = catalog.shape.EPISODE or m.shape = catalog.shape.EXTRA then frameUri = theme.art.STILL_FRAME
+    if framed then frameUri = Mid(placed, 3)
+    if m.frame.uri <> frameUri then m.frame.uri = frameUri
+    if framed then placed = ""
+    halves = placed.Split(";")
+    bottom = ""
+    if halves.Count() > 1 then bottom = halves[1]
+    if halves[0] <> "" and m.ovPoster = invalid then m.ovPoster = overlayPoster("overlays")
+    if bottom <> "" and m.ovPoster2 = invalid then m.ovPoster2 = overlayPoster("overlaysBottom")
+    overlayHalf(m.ovPoster, halves[0])
+    overlayHalf(m.ovPoster2, bottom)
+end sub
+
+' A hidden Poster under the frame (the halves do not overlap).
+function overlayPoster(id as String) as Object
+    poster = CreateObject("roSGNode", "Poster")
+    poster.id = id
+    poster.visible = false
+    index = 0
+    for each child in m.card.getChildren(-1, 0)
+        if child.isSameNode(m.frame) then exit for
+        index = index + 1
+    end for
+    m.card.insertChild(poster, index)
+    return poster
+end function
+
+sub overlayHalf(poster as Dynamic, placed as String)
+    if poster = invalid then return
+    if placed = ""
+        poster.visible = false
+        return
+    end if
+    parts = placed.Split(",")
+    poster.setFields({ translation: [parts[0].ToInt(), parts[1].ToInt()], width: parts[2].ToInt(), height: parts[3].ToInt(), uri: parts[4], visible: true })
+end sub

@@ -92,10 +92,13 @@ beside it overrides English key by key. JSON has no comments, so the file's
 one rule lives here: a change adds keys only under the prefix of the screens
 it owns, so parallel work merges cleanly. Shell and Home use `home.`,
 `topBar.`, `menu.`, and `catalog.`; detail `detail.`; libraries and Search
-`library.`, `browse.`, and `search.`; Watch Party `watchParty.`; the player `player.`, `options.`,
+`library.`, `browse.`, and `search.`; card overlays `overlays.`; Watch Party `watchParty.`; the player `player.`, `options.`,
 `upNext.`, and `skipIntro.`; first run and profiles `firstRun.`, `setup.`,
 `signIn.`, `update.`, `passwordOff.`, `profiles.`, `pin.`, and `states.`. The shared
 `common.` and `language.` keys change in a change of their own.
+`scripts/badge-art.py` regenerates `images/badges/`: the card overlay
+badges' glyphs, which `OverlayArtTask` scales into each card's overlay image
+(fills, borders, and scrims it draws itself).
 `scripts/watch-party-art.py` regenerates `images/watchparty/` (the
 seats' shade and rings, the ballot's add card, and the lobby backdrop's
 gradients) with the first-run script's shape and PNG helpers.

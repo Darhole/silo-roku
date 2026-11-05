@@ -1,0 +1,164 @@
+import "pkg:/components/views/overlayState.bs"
+import "pkg:/source/api/client.bs"
+import "pkg:/source/api/session.bs"
+import "pkg:/components/overlays/overlays.bs"
+import "pkg:/source/util/values.bs"
+
+' Reading the open profile's card overlays (catalog.overlays) for the shell,
+' as the web's useOverlayPrefs and tvOS's OverlayPrefsStore read them: the
+' server's overlay config (its default document, whether badges are on, and
+' the uploaded images) and the profile's own ui.card_overlays and
+' ui.card_overlays_enabled, read together. Until both answer, the profile's
+' last answer this session applies, and a profile without one draws no
+' badges, so the built-in look never flashes before the profile's own. A
+' failed read keeps what applies; a server without the overlay config
+' publishes the built-in document. components/views/overlayState.bs keeps
+' what applies for cards.
+
+sub overlayRead()
+    key = overlayKey()
+    known = invalid
+    if key <> "" and m.global.hasField("cardOverlaysKnown") then known = m.global.cardOverlaysKnown[key]
+    overlayApply(key, known)
+    m.overlayReading = { key: key, config: invalid, values: invalid, pending: 2, failed: false }
+    if key = "" then return
+    ' Started now, it listens before any uploaded image is handed to it.
+    overlayArtNode()
+    for each pair in [[catalog.overlays.configRequest(), "onOverlayConfig"], [catalog.overlays.valuesRequest(), "onOverlayValues"]]
+        handle = api.newHandle(m.top.owner)
+        handle.observeField("status", pair[1])
+        api.send(pair[0], handle)
+    end for
+end sub
+
+sub onOverlayConfig(event as Object)
+    result = api.resultOf(event.getRoSGNode())
+    reading = m.overlayReading
+    if not overlayReadCurrent(reading) or not util.isObject(result) then return
+    if util.isTrue(result.ok)
+        reading.config = result.body
+    else if not (util.isNumber(result.status) and result.status = 404)
+        ' A server without the endpoint draws the built-in document; any
+        ' other failure keeps what applies.
+        reading.failed = true
+    end if
+    overlayReadSettle(reading)
+end sub
+
+sub onOverlayValues(event as Object)
+    result = api.resultOf(event.getRoSGNode())
+    reading = m.overlayReading
+    if not overlayReadCurrent(reading) or not util.isObject(result) then return
+    if util.isTrue(result.ok)
+        reading.values = catalog.overlays.profileValues(result.body)
+    else if not (util.isNumber(result.status) and result.status = 404)
+        ' A server without the endpoint leaves its default to apply; any
+        ' other failure keeps what applies, as the profile's choice is not
+        ' known.
+        reading.failed = true
+    end if
+    overlayReadSettle(reading)
+end sub
+
+sub overlayReadSettle(reading as Object)
+    reading.pending = reading.pending - 1
+    if reading.pending > 0 then return
+    m.overlayReading = invalid
+    if reading.failed then return
+    settled = catalog.overlays.settle(reading.values, reading.config)
+    ' The uploaded images the document draws go to OverlayArtTask before it
+    ' applies, so no card is drawn without them; each once this session.
+    had = {}
+    if m.global.hasField("overlayImagesSent") then had = m.global.overlayImagesSent
+    refs = []
+    for each ref in catalog.overlays.usedImages(settled.prefs)
+        if not had.DoesExist(ref) and settled.images.DoesExist(ref) then refs.Push(ref)
+    end for
+    m.overlayImages = { key: reading.key, settled: settled, refs: refs, delivered: false }
+    overlayNextImage()
+end sub
+
+' Downloads the next image the settled document draws, through ApiTask, or
+' publishes the document when none is left. A failed download leaves the
+' badge to draw without it.
+sub overlayNextImage()
+    loading = m.overlayImages
+    if loading = invalid then return
+    if loading.key <> overlayKey()
+        m.overlayImages = invalid
+        return
+    end if
+    if loading.refs.Count() = 0
+        m.overlayImages = invalid
+        overlayPublish(loading.settled, loading.key, loading.delivered)
+        return
+    end if
+    loading.ref = loading.refs.Shift()
+    handle = api.newHandle(m.top.owner)
+    handle.observeField("status", "onOverlayImage")
+    api.send(catalog.overlays.imageRequest(loading.ref), handle)
+end sub
+
+' Hands the downloaded file to OverlayArtTask at once, which keeps its own
+' copy (ApiTask keeps only its last few downloads).
+sub onOverlayImage(event as Object)
+    result = api.resultOf(event.getRoSGNode())
+    loading = m.overlayImages
+    if loading = invalid or not util.isObject(result) then return
+    if util.isTrue(result.ok) and util.isObject(result.body) and util.isString(result.body.path)
+        overlayArtNode().image = { ref: loading.ref, path: result.body.path }
+        loading.delivered = true
+        sent = {}
+        if m.global.hasField("overlayImagesSent") then sent = m.global.overlayImagesSent
+        sent[loading.ref] = true
+        if m.global.hasField("overlayImagesSent")
+            m.global.overlayImagesSent = sent
+        else
+            m.global.addFields({ overlayImagesSent: sent })
+        end if
+    end if
+    overlayNextImage()
+end sub
+
+function overlayReadCurrent(reading as Dynamic) as Boolean
+    if not util.isObject(reading) or reading.pending <= 0 then return false
+    return reading.key = overlayKey()
+end function
+
+' The open session's "<origin>|<profileId>", or "" without a profile.
+function overlayKey() as String
+    session = api.session.current()
+    if session = invalid or not util.isObject(session.profile) then return ""
+    profileId = util.text(session.profile.id)
+    if profileId = "" then return ""
+    return util.text(session.origin) + "|" + profileId
+end function
+
+' Records what cards draw (catalog.overlays.settle) for key and makes it
+' what applies.
+' fresh, when new images came with it, names it anew so cards draw again with
+' them even if the document is unchanged.
+sub overlayPublish(settled as Object, key as String, fresh = false as Boolean)
+    known = {}
+    if m.global.hasField("cardOverlaysKnown") then known = m.global.cardOverlaysKnown
+    settled.origin = Left(key, Instr(1, key, "|") - 1)
+    ' Card overlay images are cached per document (components/views/
+    ' cardOverlays.bs) for this session, as OverlayArtTask's files are: the
+    ' same document again keeps its name, compared rather than serialized
+    ' and hashed on the render thread.
+    previous = known[key]
+    if not fresh and util.isObject(previous) and catalog.overlays.same(previous.prefs, settled.prefs) and catalog.overlays.same(previous.images, settled.images)
+        settled.prefsKey = previous.prefsKey
+    else
+        if not m.global.hasField("overlayDocuments") then m.global.addFields({ overlayDocuments: 0 })
+        m.global.overlayDocuments = m.global.overlayDocuments + 1
+        settled.prefsKey = "d" + m.global.overlayDocuments.ToStr()
+    end if
+    known[key] = settled
+    if m.global.hasField("cardOverlaysKnown")
+        m.global.cardOverlaysKnown = known
+    else
+        m.global.addFields({ cardOverlaysKnown: known })
+    end if
+    overlayApply(key, settled)
+end sub
