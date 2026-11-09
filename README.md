@@ -147,9 +147,22 @@ implement and review changes through our own workflow, and pull request volume
 has outgrown what we can review carefully, so a good issue usually helps us
 more than a pull request.
 
+Feature ideas go in
+[Discussions → Ideas](https://github.com/Silo-Server/silo-roku/discussions/categories/ideas),
+not issues. Search first and upvote an existing idea rather than repeating it.
+Maintainers open an issue for an idea when they plan to build it.
+
 Pull requests are still welcome from contributors who've had one merged in a
-Silo repository, or when a maintainer asks for one. We close other pull
-requests without review.
+Silo repository, or when a maintainer asks for one. A feature pull request (a
+`feat` title) from someone without triage or write access must also link, in
+its description, an issue in this repository that a maintainer has labeled
+`accepted`. A workflow closes other pull
+requests without review when they open. That isn't a judgment of the work: if
+the problem still matters, open an issue and link the closed pull request. Once
+a feature's issue is labeled `accepted`, link it in a new pull request, or ask a
+maintainer to reopen the closed one. If a maintainer asked you for a pull
+request and you haven't had one merged yet, the workflow still closes it when it
+opens; the maintainer reopens it, and the check leaves it alone from then on.
 
 ## License and trademarks
 
