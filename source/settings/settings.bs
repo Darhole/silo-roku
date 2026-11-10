@@ -1,14 +1,22 @@
 import "pkg:/source/catalog/pickers.bs"
+import "pkg:/source/settings/appLanguage.bs"
+import "pkg:/source/util/i18n.bs"
 import "pkg:/source/util/values.bs"
 
 ' Only controls the Roku actually consumes. The server contract supplies
 ' schemas and option sets; device playback overrides leave the profile intact.
 namespace settings
+    ' The App language row's "Match device", once the catalog has it; until
+    ' then the manifest's English unset_label.
+    const MATCH_DEVICE_KEY = "settings.appLanguage.matchDevice"
     ' The theme music rows are written as this Roku's choice, as tvOS
     ' writes this Apple TV's, and show only when the server offers theme
     ' music (requires: components/audio/ThemeMusic's offered).
     function supportedControls() as Object
         return [
+            ' The profile's interface language (manifest revision 27), in the
+            ' manifest's appearance category; tvOS has no such row yet.
+            { key: appLanguage.KEY, category: "general", section: "appearance", label: "appLanguage", device: false },
             { key: "ui.title_art", category: "general", section: "appearance", label: "titleArt", device: false },
             { key: "playback.preferred_quality", category: "playback", section: "quality", label: "resolution", device: true },
             { key: "playback.max_bitrate_kbps", category: "playback", section: "quality", label: "bitrate", device: true },
@@ -43,7 +51,8 @@ namespace settings
 
     ' Runs on ApiTask, retaining nineteen small definitions rather than the
     ' entire manifest. Unknown or incompatible definitions are not editable.
-    function contract(body as Object, copy as Object) as Dynamic
+    ' withCatalog is i18n.catalogs()'s answer, read when invalid.
+    function contract(body as Object, copy as Object, withCatalog = invalid as Dynamic) as Dynamic
         if type(body.definitions) <> "roArray" then return invalid
         out = []
         for each control in supportedControls()
@@ -54,11 +63,15 @@ namespace settings
                     scope = "profile"
                     if control.device and util.contains(definition.allowed_scopes, "profile_device") then scope = "profile_device"
                     if not util.contains(definition.allowed_scopes, scope) then exit for
-                    options = definitionOptions(definition, body.option_sets, copy)
+                    options = definitionOptions(definition, body.option_sets, copy, withCatalog)
                     if options.Count() = 0 then exit for
                     control.scope = scope
+                    control.deviceScope = util.contains(definition.allowed_scopes, "profile_device")
                     control.options = options
                     control.schema = schema
+                    ' The manifest's English label, for a row the catalog has
+                    ' no title for (rowTitle).
+                    control.title = util.text(definition.label)
                     out.Push(control)
                     exit for
                 end if
@@ -67,11 +80,25 @@ namespace settings
         return { controls: out }
     end function
 
-    function definitionOptions(definition as Object, sets as Dynamic, copy as Object) as Object
+    function definitionOptions(definition as Object, sets as Dynamic, copy as Object, withCatalog = invalid as Dynamic) as Object
         schema = definition.value_schema
         out = []
         kind = util.text(schema.type)
-        if kind = "boolean"
+        if definition.key = appLanguage.KEY and kind = "language_tag"
+            ' "Match device", then each language this package has strings
+            ' for, in its own name and font (locale), never the manifest's
+            ' suggestions, which hold Arabic (decisions D5, D9 and D25).
+            ' picker keeps a stored tag outside them.
+            if util.isTrue(schema.nullable)
+                title = util.text(definition.unset_label)
+                if i18n.has(copy, MATCH_DEVICE_KEY) then title = i18n.lookup(copy, MATCH_DEVICE_KEY)
+                out.Push({ value: invalid, title: title })
+            end if
+            if withCatalog = invalid then withCatalog = i18n.catalogs()
+            for each language in i18n.languages()
+                if withCatalog.DoesExist(language.folder) then out.Push({ value: language.tag, title: language.name, locale: language.folder })
+            end for
+        else if kind = "boolean"
             out = [{ value: true, title: i18n.lookup(copy, "settings.on") }, { value: false, title: i18n.lookup(copy, "settings.off") }]
         else if kind = "enum" and type(schema.values) = "roArray"
             for each option in schema.values
@@ -106,6 +133,24 @@ namespace settings
         label = catalog.pickers.languageName(code, copy)
         if Instr(1, code, "-") > 0 then label = label + " (" + code + ")"
         return label
+    end function
+
+    ' A row's title: its catalog key, settings.control.<label>, else the
+    ' manifest's English label.
+    function rowTitle(control as Object, copy as Object) as String
+        key = "settings.control." + control.label
+        if i18n.has(copy, key) or util.text(control.title) = "" then return i18n.lookup(copy, key)
+        return control.title
+    end function
+
+    ' The locale folder whose font draws value's label (an App language
+    ' option names its language in its own script), or invalid for the
+    ' applied language's.
+    function labelLocale(control as Object, value as Dynamic) as Dynamic
+        for each option in control.options
+            if util.isString(option.locale) and same(option.value, value) then return option.locale
+        end for
+        return invalid
     end function
 
     function bitrateLabel(cap as Integer) as String
@@ -170,6 +215,7 @@ namespace settings
         selected = authored(item)
         for each option in control.options
             row = { value: options.Count(), title: option.title, wire: option.value, reset: false, detail: "" }
+            if util.isString(option.locale) then row.locale = option.locale
             if same(option.value, selected) then chosen = row.value
             options.Push(row)
         end for
@@ -185,6 +231,17 @@ namespace settings
         end if
         if control.scope = "profile_device" and not isOwn(control, item) then chosen = 0
         return { items: options, chosen: chosen }
+    end function
+
+    ' The App language picker writes the profile's value and first clears
+    ' this Roku's own (profile_device), so the choice follows the person and
+    ' no value of this device's outranks it (decision D30): that DELETE when
+    ' the effective item comes from this Roku's own value (it wins the
+    ' resolution order), or invalid for none and for every other row.
+    function clearDeviceRequest(control as Object, item as Dynamic) as Dynamic
+        if control.key <> appLanguage.KEY or control.scope <> "profile" or not util.isTrue(control.deviceScope) then return invalid
+        if not util.isObject(item) or (util.text(item.source) <> "profile_device" and util.text(item.scope) <> "profile_device") then return invalid
+        return { method: "DELETE", path: "/api/v2/settings/values/" + control.key, query: { scope: "profile_device" }, auth: "profile", orderKey: "settings." + control.key + ".device" }
     end function
 
     function writeRequest(control as Object, option as Object) as Object

@@ -14,6 +14,37 @@ namespace api.problem
         return problem
     end function
 
+    ' The catalog's own text for a Problem body (spec "Server-provided
+    ' text"): error.field.<code> for its first field error whose code the
+    ' applied language's own file has, else error.<type>; "" when it has
+    ' neither, and the caller shows the server's detail. English's generic
+    ' text never stands in for the server's specific detail: always "" in
+    ' English, for a table that names no language ("@locale"), and for a key
+    ' only English has ("@own.<key>", i18n.load) (decision D33).
+    function message(body as Dynamic, strings as Dynamic) as String
+        if type(body) <> "roAssociativeArray" or type(strings) <> "roAssociativeArray" then return ""
+        language = strings["@locale"]
+        if not isString(language) or language = "" or language = "en_US" then return ""
+        if type(body.errors) = "roArray"
+            for each entry in body.errors
+                if type(entry) = "roAssociativeArray" and isString(entry.code) and entry.code <> ""
+                    found = ownText(strings, "error.field." + entry.code)
+                    if found <> "" then return found
+                end if
+            end for
+        end if
+        name = typeName(body.type)
+        if name = invalid then return ""
+        return ownText(strings, "error." + name)
+    end function
+
+    ' key's text when the applied language's own file has it, else "".
+    function ownText(strings as Object, key as String) as String
+        found = strings[key]
+        if isString(found) and isString(strings["@own." + key]) then return found
+        return ""
+    end function
+
     ' True for an AA with Silo's required members (type, title, status).
     function isProblem(body as Dynamic) as Boolean
         if type(body) <> "roAssociativeArray" then return false

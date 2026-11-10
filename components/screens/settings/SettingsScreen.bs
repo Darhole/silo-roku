@@ -14,6 +14,7 @@ import "pkg:/source/onboarding/launch.bs"
 import "pkg:/source/playback/themeMusic.bs"
 import "pkg:/source/platform/client.bs"
 import "pkg:/source/playback/connection.bs"
+import "pkg:/source/settings/appLanguage.bs"
 import "pkg:/source/settings/settings.bs"
 import "pkg:/source/util/i18n.bs"
 import "pkg:/source/util/version.bs"
@@ -59,6 +60,11 @@ sub init()
     m.picker = invalid
     m.dialog = invalid
     m.pending = invalid
+    ' The profile write that waits for this Roku's own value to clear
+    ' (onDeviceCleared), the clear's handle, and whether that value went.
+    m.pendingWrite = invalid
+    m.clearRequest = invalid
+    m.deviceCleared = false
     m.readRequest = invalid
     m.rows = []
     ' Each row's section, "" for none: the controls', then Connection's.
@@ -203,6 +209,9 @@ sub onShow(event as Object)
     scene.callFunc("connectionRefresh")
     ' A pending save that was never confirmed belongs to an earlier visit.
     m.pending = invalid
+    m.pendingWrite = invalid
+    m.clearRequest = invalid
+    m.deviceCleared = false
     if util.isObject(event.restore)
         ' A rebuilt screen starts on General; the key carries the category.
         if util.isString(event.restore.category) then m.category = event.restore.category
@@ -412,6 +421,8 @@ sub send(request as Object, callback as String)
         m.readRequest = handle
         if previous <> invalid then api.cancel(previous)
     end if
+    ' The clear of this Roku's own App language that the save waits on.
+    if callback = "onDeviceCleared" then m.clearRequest = handle
     handle.observeField("status", callback)
     api.send(request, handle)
 end sub
@@ -533,7 +544,7 @@ sub showCategory()
     for each control in m.controls
         if control.category = m.category and shows(control)
             row = makeRow(group, control.key, true)
-            row.title.text = i18n.text("settings.control." + control.label)
+            row.title.text = settings.rowTitle(control, m.copy)
             row.section.text = UCase(i18n.text("settings.section." + control.section))
             m.rows.Push(row)
             m.rowSections.Push(control.section)
@@ -634,7 +645,10 @@ sub paint()
         else if i < m.shown.Count() and m.values <> invalid
             control = m.shown[i]
             item = m.values[control.key]
-            if item <> invalid then row.value.text = settings.valueLabel(control, item.value, m.copy)
+            if item <> invalid
+                row.value.text = settings.valueLabel(control, item.value, m.copy)
+                row.value.font = theme.font(theme.textStyle.SETTINGS_VALUE, 1.0, settings.labelLocale(control, item.value))
+            end if
         else if i >= m.shown.Count() and i - m.shown.Count() < m.connectionRows.Count()
             paintConnectionRow(row, m.connectionRows[i - m.shown.Count()])
         end if
@@ -800,7 +814,7 @@ function activate() as Boolean
         m.options = settings.picker(control, m.values[control.key], m.copy)
         modal = m.top.findNode("modal")
         m.picker = modal.createChild("TrackPicker")
-        m.picker.title = i18n.text("settings.control." + control.label)
+        m.picker.title = settings.rowTitle(control, m.copy)
         m.picker.centered = true
         m.picker.options = m.options
         m.picker.chosen = m.options.chosen
@@ -894,6 +908,38 @@ sub onPicked(event as Object)
     m.pending = settings.writeRequest(control, option)
     m.busy = true
     notice("settings.saving", false)
+    ' App language first clears this Roku's own value (settings.clearDeviceRequest).
+    clear = settings.clearDeviceRequest(control, item)
+    m.deviceCleared = false
+    if clear = invalid
+        send(m.pending, "onSaved")
+    else
+        m.pendingWrite = m.pending
+        m.pending = clear
+        send(clear, "onDeviceCleared")
+    end if
+end sub
+
+' This Roku's own App language is gone (or was already: 404); the
+' profile's value is written next. Only the clear the current save sent
+' counts: one from an earlier save, or a visit onShow dropped, does nothing.
+sub onDeviceCleared(event as Object)
+    handle = event.getRoSGNode()
+    if m.released or m.pendingWrite = invalid or m.clearRequest = invalid or not handle.isSameNode(m.clearRequest) then return
+    m.clearRequest = invalid
+    result = api.resultOf(handle)
+    if not result.ok and result.status <> 404
+        m.pending = invalid
+        m.pendingWrite = invalid
+        m.deviceCleared = false
+        m.busy = false
+        notice("settings.saveFailed", true)
+        return
+    end if
+    ' Gone either way, so a failed write after it reads what applies now.
+    m.deviceCleared = true
+    m.pending = m.pendingWrite
+    m.pendingWrite = invalid
     send(m.pending, "onSaved")
 end sub
 
@@ -919,10 +965,20 @@ sub onSaved(event as Object)
         m.pending = invalid
         m.busy = false
         notice("settings.saveFailed", true)
+        ' This Roku's own App language went before the write failed: the row
+        ' and the app read the value that applies now.
+        if util.isTrue(m.deviceCleared)
+            m.deviceCleared = false
+            m.top.getScene().callFunc("languageChanged")
+            loadValues()
+        end if
         return
     end if
+    m.deviceCleared = false
     ' Descriptions now come in another language: Home reads its rows again.
     if util.text(m.pending.orderKey) = "settings." + catalog.translation.LANGUAGE_KEY then metadataLanguageChanged()
+    ' A new app language rebuilds every screen, this one too (AppSceneLanguage.bs).
+    if util.text(m.pending.orderKey) = "settings." + appLanguage.KEY then m.top.getScene().callFunc("languageChanged")
     loadValues()
 end sub
 
@@ -1014,7 +1070,7 @@ sub diagnosticsValues()
     count = 0
     if type(state.sent) = "roArray" then count = state.sent.Count()
     eraseText = i18n.text("settings.diagnostics.none")
-    if count > 0 then eraseText = i18n.text("settings.diagnostics.count", { count: count.ToStr() })
+    if count > 0 then eraseText = i18n.plural("settings.diagnostics.count", count)
     m.rows[1].value.text = eraseText
 end sub
 

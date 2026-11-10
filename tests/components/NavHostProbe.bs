@@ -26,6 +26,15 @@ function probeRoutes(_args = invalid as Dynamic) as Object
     return routes
 end function
 
+' A profile's main shell waits for its app language (held), or not.
+sub probeHold(held as Boolean)
+    if held
+        m.languageHeld = { decision: {} }
+    else
+        m.languageHeld = invalid
+    end if
+end sub
+
 function probeBack(_args = invalid as Dynamic) as Boolean
     return onKeyEvent("back", true)
 end function
@@ -57,6 +66,21 @@ sub companionRefresh()
 end sub
 
 sub launchOfferCheck()
+end sub
+
+function languageHolds(_decision as Object) as Boolean
+    return false
+end function
+
+function languageDrops(_origin as String) as Boolean
+    return false
+end function
+
+function languageShell() as Object
+    return m.navShell
+end function
+
+sub languageDrop()
 end sub
 
 sub apiRelease(owner as String)

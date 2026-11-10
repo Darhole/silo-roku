@@ -69,12 +69,27 @@ end function
 
 ' Called by onApiSession for each session ApiTask publishes.
 sub navSessionChanged()
-    navShellChanged(nav.phase.onSession(m.navShell, m.apiSession))
+    navShellChanged(nav.phase.onSession(languageShell(), m.apiSession))
 end sub
 
+' A profile's main shell waits for its app language, the shell with it, so
+' nothing that follows the phase acts on the main shell before its screens
+' exist (AppSceneLanguage.bs). In that wait a decision starts from the held
+' shell, the latest state, but whether the stack starts over is judged
+' against the shell on screen: decided from the screen's stale shell, a
+' second Retry on "server update required" read the old refused session,
+' ended the wait without its reset, and left the update screen up.
 sub navShellChanged(decision as Object)
+    decision = nav.phase.decide(m.navShell, decision.shell)
+    if decision.reset and languageHolds(decision) then return
+    languageDrop()
     m.navShell = decision.shell
     if not decision.reset then return
+    navReset(decision)
+end sub
+
+' The stack starts over at decision's root.
+sub navReset(decision as Object)
     log.info("nav", "phase", { phase: decision.shell.phase })
     onboarding.beacons.enterPhase(m.navBeacons, decision.shell.phase <> nav.phase.MAIN)
     navApply(nav.stack.reset(m.navStack, decision.root, deepLinkRootParams(decision.root)))
@@ -85,6 +100,7 @@ end sub
 ' of the screen that asks, or "" from AppScene itself, which acts at once.
 
 sub navPush(route as String, params as Object, origin = "" as String)
+    if languageDrops(origin) then return
     if navHeld(origin, { op: "push", route: route, params: params }) then return
     navBeforeOpen(route, params)
     navSaveFocus()
@@ -92,11 +108,13 @@ sub navPush(route as String, params as Object, origin = "" as String)
 end sub
 
 sub navPop(origin = "" as String)
+    if languageDrops(origin) then return
     if navHeld(origin, { op: "pop" }) then return
     navApply(nav.stack.pop(m.navStack))
 end sub
 
 sub navReplace(route as String, params as Object, origin = "" as String)
+    if languageDrops(origin) then return
     if navHeld(origin, { op: "replace", route: route, params: params }) then return
     navBeforeOpen(route, params)
     navApply(nav.stack.replace(m.navStack, route, params))
@@ -109,11 +127,13 @@ sub navBeforeOpen(route as String, params as Object)
 end sub
 
 sub navPopToRoot(origin = "" as String)
+    if languageDrops(origin) then return
     if navHeld(origin, { op: "popToRoot" }) then return
     navApply(nav.stack.popToRoot(m.navStack))
 end sub
 
 sub navSwitchTab(route as String, params as Object, origin = "" as String)
+    if languageDrops(origin) then return
     if navHeld(origin, { op: "switchTab", route: route, params: params }) then return
     navApply(nav.stack.reset(m.navStack, route, params))
 end sub
@@ -159,7 +179,7 @@ sub navPlayed(entryId as String, played as Object)
 end sub
 
 sub navServerUpdateRequired(required as Boolean)
-    navShellChanged(nav.phase.onUpdateRequired(m.navShell, required))
+    navShellChanged(nav.phase.onUpdateRequired(languageShell(), required))
 end sub
 
 ' A nav.pressure level, from the memory policy (AppScenePlatform.bs).
@@ -172,6 +192,10 @@ end sub
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press or key <> "back" then return false
     if m.navExiting then return true
+    ' In the language wait (AppSceneLanguage.bs) the stack is still the one
+    ' the held reset replaces, so Back waits for that reset, at most
+    ' LANGUAGE_WAIT_SECONDS, as navigation a screen asks for is dropped.
+    if m.languageHeld <> invalid then return true
     ' Watch Party's room panel, over the player, closes first.
     if watchPartyBack() then return true
     top = nav.stack.topEntry(m.navStack)

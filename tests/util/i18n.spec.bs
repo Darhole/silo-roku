@@ -3,7 +3,29 @@ namespace tests
     @suite("util i18n")
     class UtilI18nTests extends rooibos.BaseTestSuite
 
+        ' Every language Roku knows counts as shipped here, though only English
+        ' has strings so far, so the specs can choose among them. The specs
+        ' of the generated list drop this and read the package's own.
+        protected override sub beforeEach()
+            GetGlobalAA().i18nLanguages = i18n.known()
+        end sub
+
+        protected override sub afterEach()
+            GetGlobalAA().Delete("i18nLanguages")
+        end sub
+
         @describe("strings")
+
+        ' A set of locale folders, keyed by index: brs-node folds a literal
+        ' key's case, which a lookup then misses.
+        function folders(names as Object) as Object
+            out = {}
+            for each name in names
+                out[name] = true
+            end for
+            return out
+        end function
+
 
         @it("fills in named values")
         sub _()
@@ -17,6 +39,8 @@ namespace tests
         sub _()
             m.assertEqual(i18n.lookup({ "a.b": "Text" }, "a.b"), "Text")
             m.assertEqual(i18n.lookup({}, "a.b"), "a.b")
+            m.assertTrue(i18n.has({ "a.b": "Text" }, "a.b"))
+            m.assertFalse(i18n.has({}, "a.b"))
         end sub
 
         @it("loads English, and falls back to it for a locale the package lacks")
@@ -24,7 +48,10 @@ namespace tests
             english = i18n.load("en_US")
             m.assertEqual(english["setup.connect"], "Connect")
             m.assertEqual(english["setup.headline"], "Enter your" + Chr(10) + "server address")
-            m.assertEqual(i18n.load("xx_YY").Count(), english.Count())
+            m.assertEqual(english["@locale"], "en_US")
+            missing = i18n.load("xx_YY")
+            m.assertEqual(missing["setup.connect"], "Connect")
+            m.assertEqual(missing["@locale"], "xx_YY")
         end sub
 
         @it("keeps every string non-empty")
@@ -32,6 +59,191 @@ namespace tests
             for each pair in i18n.load("en_US").Items()
                 m.assertTrue(util.isString(pair.value) and pair.value <> "", pair.key)
             end for
+        end sub
+
+        @it("ships English and each language the generated list names, with a folder each, and never Arabic")
+        sub _()
+            GetGlobalAA().Delete("i18nLanguages")
+            shipped = {}
+            for each language in i18n.languages()
+                shipped[language.folder] = true
+                m.assertTrue(ReadAsciiFile("pkg:/locale/" + language.folder + "/strings.json") <> "", language.folder)
+                m.assertEqual(i18n.match(language.tag), language.folder)
+            end for
+            m.assertEqual(i18n.languages()[0].folder, "en_US")
+            ' A folder the generator lists but Roku has no tag or name for
+            ' would be dropped: known() must grow with the catalog.
+            generated = ParseJson(ReadAsciiFile("pkg:/locale/languages.json"))
+            for each folder in generated.languages
+                m.assertTrue(shipped.DoesExist(folder), folder)
+            end for
+            m.assertFalse(shipped.DoesExist("ar"))
+            m.assertEqual(ReadAsciiFile("pkg:/locale/ar/strings.json"), "")
+            for each language in i18n.known()
+                m.assertEqual(ReadAsciiFile("pkg:/locale/" + language.folder + "/strings.json") <> "", shipped.DoesExist(language.folder), language.folder)
+            end for
+        end sub
+
+        @it("applies neither a stored choice nor the device's language that this package does not ship")
+        sub _()
+            GetGlobalAA().Delete("i18nLanguages")
+            shipped = {}
+            for each language in i18n.languages()
+                shipped[language.folder] = true
+            end for
+            for each language in i18n.known()
+                if not shipped.DoesExist(language.folder)
+                    m.assertEqual(i18n.match(language.tag), "", language.tag)
+                    m.assertEqual(i18n.resolve(language.tag, "en_US"), "en_US", language.tag)
+                    m.assertEqual(i18n.resolve(invalid, language.folder), "en_US", language.folder)
+                end if
+            end for
+        end sub
+
+        @it("names each known language's tag")
+        sub _()
+            m.assertEqual(i18n.tagOf("pt_BR"), "pt-BR")
+            m.assertEqual(i18n.tagOf("zh_Hans"), "zh-Hans")
+            m.assertEqual(i18n.tagOf("xx"), "en")
+        end sub
+
+        @describe("plurals")
+
+        @it("picks the English forms by count, with count filled in")
+        sub _()
+            english = i18n.load("en_US")
+            m.assertEqual(i18n.pluralIn(english, "catalog.seasons", 1), "1 Season")
+            m.assertEqual(i18n.pluralIn(english, "catalog.seasons", 0), "0 Seasons")
+            m.assertEqual(i18n.pluralIn(english, "catalog.seasons", 4), "4 Seasons")
+            m.assertEqual(i18n.pluralIn(english, "pin.lockout", 1, { minutes: 1 }), "Too many incorrect PINs. Try again in 1 minute.")
+            m.assertEqual(i18n.pluralIn(english, "watchParty.presence.ready", 3, { ready: 2, total: 3 }), "2 of 3 ready")
+            ' A plain key reads as itself, so callers need not tell them apart.
+            m.assertEqual(i18n.pluralIn(english, "search.searching", 3), english["search.searching"])
+            m.assertEqual(i18n.pluralIn(english, "no.such.key", 3), "no.such.key")
+        end sub
+
+        @it("follows each language's CLDR categories")
+        sub _()
+            m.assertEqual(pluralRules.category("en_US", 1), "one")
+            m.assertEqual(pluralRules.category("en_US", 0), "other")
+            ' French and Portuguese count 0 as one, and a million as many.
+            m.assertEqual(pluralRules.category("fr", 0), "one")
+            m.assertEqual(pluralRules.category("pt_BR", 0), "one")
+            m.assertEqual(pluralRules.category("pt_BR", 2), "other")
+            m.assertEqual(pluralRules.category("pt_BR", 1000000), "many")
+            m.assertEqual(pluralRules.category("es", 1000000), "many")
+            m.assertEqual(pluralRules.category("de", 1000000), "other")
+            ' Japanese and Chinese have only other.
+            for each folder in ["ja", "zh_Hans"]
+                for each count in [0, 1, 2, 1000000]
+                    m.assertEqual(pluralRules.category(folder, count), "other", folder + " " + count.ToStr())
+                end for
+            end for
+        end sub
+
+        @it("reads a translated plural in its language's categories")
+        sub _()
+            portuguese = { "@locale": "pt_BR", "x.one": "{count} temporada", "x.many": "{count} de temporadas", "x.other": "{count} temporadas" }
+            m.assertEqual(i18n.pluralIn(portuguese, "x", 0), "0 temporada")
+            m.assertEqual(i18n.pluralIn(portuguese, "x", 2), "2 temporadas")
+            m.assertEqual(i18n.pluralIn(portuguese, "x", 1000000), "1000000 de temporadas")
+            japanese = { "@locale": "ja", "x.one": "{count} one", "x.other": "{count}シーズン" }
+            m.assertEqual(i18n.pluralIn(japanese, "x", 1), "1シーズン")
+            m.assertEqual(i18n.pluralIn(japanese, "x", 5), "5シーズン")
+            chinese = { "@locale": "zh_Hans", "x.other": "{count} 季" }
+            m.assertEqual(i18n.pluralIn(chinese, "x", 1), "1 季")
+        end sub
+
+        @it("reads an untranslated plural in English's categories")
+        sub _()
+            ' French before its translation of the key lands: an empty file.
+            french = i18n.merge(i18n.readFile("en_US"), {}, "fr")
+            m.assertEqual(french["@locale"], "fr")
+            m.assertEqual(french["@plural.catalog.seasons"], "en_US")
+            ' French would pick one at 0; English's other is the right form.
+            m.assertEqual(i18n.pluralIn(french, "catalog.seasons", 0), "0 Seasons")
+            m.assertEqual(i18n.pluralIn(french, "catalog.seasons", 1), "1 Season")
+            ' Without the marker, Japanese would pick other at 1.
+            m.assertEqual(i18n.pluralIn(i18n.load("ja"), "catalog.seasons", 1), "1 Season")
+            m.assertFalse(i18n.load("en_US").DoesExist("@plural.catalog.seasons"))
+        end sub
+
+        @it("keeps the plural entries and markers in a projection and across a node field")
+        sub _()
+            french = i18n.merge(i18n.readFile("en_US"), {}, "fr")
+            words = i18n.pluralEntries(french, "catalog.seasons")
+            m.assertEqual(words, { "catalog.seasons.one": "{count} Season", "catalog.seasons.other": "{count} Seasons", "@plural.catalog.seasons": "en_US", "@locale": "fr" })
+            node = CreateObject("roSGNode", "ContentNode")
+            node.addFields({ table: french })
+            copied = node.table
+            m.assertEqual(copied["@locale"], "fr")
+            m.assertEqual(i18n.pluralIn(copied, "catalog.seasons", 0), "0 Seasons")
+        end sub
+
+        @describe("language")
+
+        @it("maps a tag or device locale to a shipped folder")
+        sub _()
+            cases = [
+                ["es_MX", "es"], ["es-419", "es"], ["ES", "es"], ["de_AT", "de"], ["fr-CA", "fr"]
+                ["pt_BR", "pt_BR"], ["pt-br", "pt_BR"], ["pt-PT", "pt_BR"], ["pt", "pt_BR"]
+                ["en_US", "en_US"], ["en-GB", "en_US"], ["en", "en_US"]
+                ["ja_JP", "ja"], ["ja", "ja"]
+                ["zh-Hans", "zh_Hans"], ["zh_CN", "zh_Hans"], ["zh-SG", "zh_Hans"], ["zh-Hans-HK", "zh_Hans"], ["zh", "zh_Hans"]
+                ["zh-TW", ""], ["zh-Hant", ""], ["zh_HK", ""], ["zh-Hant-CN", ""]
+                ["ar", ""], ["ar_SA", ""], ["it_IT", ""], ["", ""], [invalid, ""], ["en-XA", "en_US"]
+            ]
+            for each c in cases
+                m.assertEqual(i18n.match(c[0]), c[1], util.text(c[0]))
+            end for
+        end sub
+
+        @it("prefers the profile's app language, then the device's, then English")
+        sub _()
+            translated = m.folders(["en_US", "es", "de", "fr"])
+            m.assertEqual(i18n.resolve("ja", "es_MX", translated), "ja")
+            m.assertEqual(i18n.resolve("pt-BR", "en_US", translated), "pt_BR")
+            ' Not shipped on Roku: the device language applies.
+            m.assertEqual(i18n.resolve("ar", "es_MX", translated), "es")
+            m.assertEqual(i18n.resolve("zh-TW", "de_DE", translated), "de")
+            ' Following the device (null) or nothing at all.
+            m.assertEqual(i18n.resolve(invalid, "fr_CA", translated), "fr")
+            m.assertEqual(i18n.resolve("", "fr_CA", translated), "fr")
+            m.assertEqual(i18n.resolve(invalid, "it_IT", translated), "en_US")
+            m.assertEqual(i18n.resolve("ar", "ar_SA", translated), "en_US")
+        end sub
+
+        @it("follows the device only into a language with strings, but a stored choice into any shipped one")
+        sub _()
+            ' Every language but English is generated empty today.
+            found = i18n.catalogs()
+            m.assertTrue(found.DoesExist("en_US"))
+            for each folder in ["es", "de", "fr", "pt_BR", "ja", "zh_Hans"]
+                m.assertEqual(found.DoesExist(folder), i18n.readFile(folder).Count() > 0, folder)
+            end for
+            englishOnly = m.folders(["en_US"])
+            m.assertEqual(i18n.resolve(invalid, "es_MX", englishOnly), "en_US")
+            m.assertEqual(i18n.resolve(invalid, "fr_CA", englishOnly), "en_US")
+            m.assertEqual(i18n.resolve("es", "fr_CA", englishOnly), "es")
+            m.assertEqual(i18n.resolve("ja", "en_US", englishOnly), "ja")
+            m.assertEqual(i18n.resolve(invalid, "es_MX", m.folders(["en_US", "es"])), "es")
+        end sub
+
+        @it("reads at launch only the device language's table, and none for English")
+        sub _()
+            g = GetGlobalAA()
+            g.i18nCatalogs = invalid
+            g.i18nHasCatalog = invalid
+            m.assertEqual(i18n.resolve(invalid, "en_US"), "en_US")
+            m.assertInvalid(g.i18nHasCatalog)
+            m.assertInvalid(g.i18nCatalogs)
+            m.assertEqual(i18n.resolve(invalid, "es_MX"), "es")
+            m.assertEqual(g.i18nHasCatalog.Keys(), ["es"])
+            m.assertInvalid(g.i18nCatalogs)
+            ' A stored choice reads no table at all.
+            g.i18nHasCatalog = invalid
+            m.assertEqual(i18n.resolve("de", "fr_CA"), "de")
+            m.assertInvalid(g.i18nHasCatalog)
         end sub
     end class
 end namespace
