@@ -18,10 +18,11 @@ import "pkg:/source/util/values.bs"
 ' language's file has not translated, which then reads English's entries with
 ' English's category (the silo-translations README's Roku contract), and
 ' "@own.<key>" for each error.* message the language's own file has
-' (api.problem.message shows only those, decision D33).
+' (api.problem.message shows only those, decision D33), and each
+' settingsManifest.* label (settings.manifestText).
 namespace i18n
     const FALLBACK_LOCALE = "en_US"
-    const UNUSED_PREFIX = "settingsManifest."
+    const MANIFEST_PREFIX = "settingsManifest."
     const ERROR_PREFIX = "error."
 
     ' The languages this package ships, in picker order: known()'s entries
@@ -42,6 +43,11 @@ namespace i18n
             for each entry in known()
                 if listed.DoesExist(entry.folder) then shipped.Push(entry)
             end for
+            #if debug
+                ' Only dev packages carry locale/en_XA (bsconfig.json), and
+                ' only they offer it, for the pseudo-locale pass (plan 2.5).
+                if util.isObject(generated) then shipped.Append(pseudo(generated.pseudo))
+            #end if
             m.i18nLanguages = shipped
         end if
         return m.i18nLanguages
@@ -50,7 +56,7 @@ namespace i18n
     ' Every language Roku can show, in picker order: the locale folder, its
     ' BCP 47 tag (Accept-Language, ui.app_language), and its own name. Roku
     ' leaves out Arabic, which it cannot lay out right to left (decision D9).
-    ' The en_XA pseudo-locale is generated but not offered. Pure.
+    ' The en_XA pseudo-locale is offered only in dev packages (pseudo). Pure.
     function known() as Object
         return [
             { folder: "en_US", tag: "en", name: "English" },
@@ -61,6 +67,16 @@ namespace i18n
             { folder: "ja", tag: "ja", name: "日本語" },
             { folder: "zh_Hans", tag: "zh-Hans", name: "简体中文" }
         ]
+    end function
+
+    ' The pseudo-locales a dev package offers after the languages: those of
+    ' listed (languages.json's "pseudo") that Roku names, in English. Pure.
+    function pseudo(listed as Dynamic) as Object
+        out = []
+        for each entry in [{ folder: "en_XA", tag: "en-XA", name: "English (pseudo, en-XA)" }]
+            if util.contains(listed, entry.folder) then out.Push(entry)
+        end for
+        return out
     end function
 
     ' The shipped folder for a language tag in BCP 47 or Roku form ("es-MX",
@@ -125,7 +141,7 @@ namespace i18n
         if folder = FALLBACK_LOCALE then return true
         if m.i18nCatalogs <> invalid then return m.i18nCatalogs.DoesExist(folder)
         if m.i18nHasCatalog = invalid then m.i18nHasCatalog = {}
-        if not m.i18nHasCatalog.DoesExist(folder) then m.i18nHasCatalog[folder] = readFile(folder).Count() > 0
+        if not m.i18nHasCatalog.DoesExist(folder) then m.i18nHasCatalog[folder] = hasInterfaceStrings(readFile(folder))
         return m.i18nHasCatalog[folder]
     end function
 
@@ -138,11 +154,47 @@ namespace i18n
             found = {}
             found[FALLBACK_LOCALE] = true
             for each language in languages()
-                if language.folder <> FALLBACK_LOCALE and readFile(language.folder).Count() > 0 then found[language.folder] = true
+                if language.folder <> FALLBACK_LOCALE and hasInterfaceStrings(readFile(language.folder)) then found[language.folder] = true
             end for
             m.i18nCatalogs = found
         end if
         return m.i18nCatalogs
+    end function
+
+    ' Whether Roku's own formats (roDateTime.AsDateString) suit folder's
+    ' strings (decision D26): when the profile chose no language (the
+    ' applied one came from the device), or chose one the device locale
+    ' already speaks ("es" on es_MX, English on en_GB). Otherwise, as for
+    ' English chosen on a German Roku, the strings' own words write dates.
+    ' deviceLocale is GetCurrentLocale's, and chosen AppScene's
+    ' (setChosen), each read when invalid.
+    function nativeFormats(folder as String, deviceLocale = invalid as Dynamic, chosen = invalid as Dynamic) as Boolean
+        if chosen = invalid then chosen = m.global <> invalid and m.global.hasField("appLanguageChosen") and m.global.appLanguageChosen = true
+        if not chosen then return true
+        if deviceLocale <> invalid then return match(deviceLocale) = folder
+        if m.i18nDeviceMatch = invalid then m.i18nDeviceMatch = match(CreateObject("roDeviceInfo").GetCurrentLocale())
+        return m.i18nDeviceMatch = folder
+    end function
+
+    ' Render thread: whether the applied language is the profile's choice
+    ' (a ui.app_language this package ships) rather than the device's, for
+    ' nativeFormats on every thread.
+    sub setChosen(chosen as Boolean)
+        if m.global.hasField("appLanguageChosen")
+            m.global.appLanguageChosen = chosen
+        else
+            m.global.addFields({ appLanguageChosen: chosen })
+        end if
+    end sub
+
+    ' Whether a language's strings hold any of its own interface text: the
+    ' settings manifest's choice labels alone, which other clients'
+    ' translations bring, do not count (decision D25). Pure.
+    function hasInterfaceStrings(strings as Object) as Boolean
+        for each key in strings
+            if Left(key, Len(MANIFEST_PREFIX)) <> MANIFEST_PREFIX then return true
+        end for
+        return false
     end function
 
     ' The BCP 47 tag of a shipped folder, "en" for any other.
@@ -235,7 +287,7 @@ namespace i18n
                 if Right(key, 6) = ".other" and not own.DoesExist(key) then markers["@plural." + Left(key, Len(key) - 6)] = FALLBACK_LOCALE
             end for
             for each key in own
-                if Left(key, Len(ERROR_PREFIX)) = ERROR_PREFIX then markers["@own." + key] = folder
+                if Left(key, Len(ERROR_PREFIX)) = ERROR_PREFIX or Left(key, Len(MANIFEST_PREFIX)) = MANIFEST_PREFIX then markers["@own." + key] = folder
             end for
             english.Append(own)
             english.Append(markers)
@@ -249,17 +301,24 @@ namespace i18n
         if raw = "" then return {}
         parsed = ParseJson(raw)
         if not util.isObject(parsed) then return {}
-        ' The settings manifest's labels (settingsManifest.*), which no Roku
-        ' screen reads yet, would make every component's copy of the table a
-        ' third larger.
         unused = []
         for each key in parsed
-            if Left(key, Len(UNUSED_PREFIX)) = UNUSED_PREFIX then unused.Push(key)
+            if isUnused(key) then unused.Push(key)
         end for
         for each key in unused
             parsed.Delete(key)
         end for
         return parsed
+    end function
+
+    ' Whether readFile leaves key out. Of the settings manifest's text
+    ' (settingsManifest.*), Settings shows only the choices' labels
+    ' (settings.manifestText): its rows have their own titles, and the
+    ' rows' labels and descriptions would make every component's copy of
+    ' the table much larger. Pure.
+    function isUnused(key as String) as Boolean
+        if Left(key, Len(MANIFEST_PREFIX)) <> MANIFEST_PREFIX then return false
+        return Instr(1, key, ".option.") = 0 and Right(key, Len(".unsetLabel")) <> ".unsetLabel"
     end function
 
     ' Render thread: puts the applied language's strings in m.global, once;
