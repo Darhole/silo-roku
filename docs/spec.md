@@ -1224,7 +1224,7 @@ their existing HD/FHD assets.
     in a fixed 435 px block, so the row stays at y 557.
 - **Action row.** Play, or "Resume 1:02:03" ("Resume 12:34" under an hour), or
   for a series "Play S2:E3" or "Resume S1:E3", then Start Over when a resume
-  point exists, then Versions, Audio Tracks, and Subtitles, then Watchlist
+  point exists, then Version, Audio, and Subtitles, then Watchlist
   and More once the item is read. Resume appears
   once the saved position passes 30 seconds and is more than 5 seconds from
   the end, whether or not the server counts the item played: the server
@@ -4460,7 +4460,7 @@ is):
 | Roku's keyboards and PIN pad speak themselves | All | None |
 | The "Connect without encryption?" dialog says its title and message, then the highlighted button, and each button as the highlight moves, through `roAudioGuide` (as the sign-out dialog does) | All | None; not yet heard on a device |
 | Lists read each card's `audioGuideText` (title, season and episode, rating, year, runtime) and each profile's name, PIN, and Kids marks | All | None |
-| Custom controls say their label when focused, through `roAudioGuide`: setup and sign-in fields, the top bar and avatar menu, the library list, sort, alphabet rail, Search filter and result count, Detail's buttons (Versions, Audio Tracks, and Subtitles with their values), seasons, and menus, the player's controls with the position, Options tabs and rows (with "selected"), Skip Intro, Skip Recap, Skip Credits, Up Next, and the player error's buttons | All | None |
+| Custom controls say their label when focused, through `roAudioGuide`: setup and sign-in fields, the top bar and avatar menu, the library list, sort, alphabet rail, Search filter and result count, Detail's buttons (Version, Audio, and Subtitles with their values), seasons, and menus, the player's controls with the position, Options tabs and rows (with "selected"), Skip Intro, Skip Recap, Skip Credits, Up Next, and the player error's buttons | All | None |
 | Setup, sign-in, the profile picker, and PIN say their inline errors as they appear | All | None |
 | Full-screen errors and empty states say their title and message, then the focused action, as they appear, at once and again when they repeat (assumption AG-176): the player's error with Retry (Try again for a lost connection), Try Anyway, or Go Back; the shared empty and error state on Home, a library, Search, and Detail, with its Retry or Refresh once it has focus; Detail's episode message; "Server update required" and the other first-run messages, on each show; sign-in's "Can't reach {server}" before Try again | All | Headless only (`tests/views/audioGuide.spec.bs`) |
 | The spinner says "Loading" and the busy capsule its state once it shows ("Playback progress is pending…", "Loading subtitles…", "Stopping…"), after what is being said, at once when it replaces an earlier state; a notice card says its title and message ("Reconnecting… The connection to the server was lost…", a refused track or quality change); neither says anything while the player's error covers it | All | Headless only |
