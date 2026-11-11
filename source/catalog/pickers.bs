@@ -25,7 +25,7 @@ namespace catalog.pickers
     ' (nav.player.withSelection).
     const AUTO = playback.tracks.AUTO
 
-    ' --- Versions -----------------------------------------------------------------
+    ' --- Version ------------------------------------------------------------------
 
     ' A version's row: "2160p · HEVC · DV · EAC3" over "Director's Cut · HEVC
     ' · MKV · 58.31 GB".

@@ -72,7 +72,7 @@ namespace tests
             m.assertEqual(catalog.pickers.audioSummary(playback.tracks.audioTracks([{ title: "Director" }])[0], m.copy()), "Director")
         end sub
 
-        @describe("Versions")
+        @describe("Version")
 
         @it("names a version by resolution, codecs, and range, and its edition, codec, container, and size beneath (tvOS)")
         sub _()

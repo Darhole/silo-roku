@@ -1,7 +1,7 @@
 namespace tests
 
     ' DetailScreen headless after the player closes, the tracks it gives the
-    ' player, and its Versions, Audio Tracks, and Subtitles menus, as
+    ' player, and its Version, Audio, and Subtitles menus, as
     ' detailScreen.spec.bs drives it (tests/helpers/detailScreen.bs). Split
     ' from that file so each headless shard stays small (README,
     ' Development).
@@ -162,7 +162,7 @@ namespace tests
             m.assertEqual(probe.callFunc("playIntent", catalog.action.START_OVER).tracks, { fileId: "77", pinsVersion: false, audioIndex: 1, subtitleIndex: playback.tracks.OFF })
         end sub
 
-        @describe("Versions, Audio Tracks, and Subtitles (spec section 5.6, tvOS b90a86ea)")
+        @describe("Version, Audio, and Subtitles (spec section 5.6, tvOS b90a86ea)")
 
         ' Heat's page through its item and two-version watch state
         ' (tests.catalogData.selectionWatch), the audio preference unanswered.
